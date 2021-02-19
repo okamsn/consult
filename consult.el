@@ -3773,17 +3773,18 @@ sections are actually ordered."
                   (zero-or-one (seq (any "\n" " " "\t")
                                     (group (+? anychar))))
                   "\n" (or "\n" "*")))))
-    (save-match-data
-      (save-selected-window
-        (with-temp-buffer
-          ;; Some nodes created from multiple files, so we need to create a
-          ;; buffer to make sure that we see everything.
-          (info "(dir)Top" (current-buffer))
-          (goto-char (point-min))
-          (search-forward "Menu:\n")
-          (let ((candidates-alist))
+    (let ((candidates-alist))
+      ;; Go through nodes in Info buffer "(dir)Top".
+      (save-match-data
+        (save-selected-window
+          (with-temp-buffer
+            ;; Some nodes created from multiple files, so we need to create a
+            ;; buffer to make sure that we see everything.
+            (info "(dir)Top" (current-buffer))
+            (goto-char (point-min))
+            (search-forward "Menu:\n")
             (while (re-search-forward sub-topic-format nil t)
-              (forward-line 0)         ; Go back to start of line.
+              (forward-line 0)          ; Go back to start of line.
               (let* ((node-display-name (match-string-no-properties 1))
                      (node-actual-name (or (match-string-no-properties 2) node-display-name)))
                 (push (cons (concat node-display-name
@@ -3795,8 +3796,24 @@ sections are actually ordered."
                                            (concat " - "))
                                          'face 'completions-annotations)))
                             node-actual-name)
-                      candidates-alist)))
-            (nreverse candidates-alist)))))))
+                      candidates-alist))))))
+      ;; In case something isn't listed (Emacs might just insert itself?), also
+      ;; add in files from the Info directories as nodes themselves.
+      (dolist (file (save-match-data
+                      (thread-last (append (or Info-directory-list
+                                               Info-default-directory-list)
+                                           Info-additional-directory-list)
+                        (mapcan (lambda (directory)
+                                  (when (file-directory-p directory)
+                                    (directory-files directory nil "\\.info" t))))
+                        (mapcar (lambda (file)
+                                  (string-match "\\(.+?\\)\\." file)
+                                  (match-string 1 file)))
+                        seq-uniq)))
+        (let ((node (concat "(" file ")")))
+          (unless (rassoc node candidates-alist)
+            (push (cons file node) candidates-alist))))
+      (nreverse candidates-alist))))
 
 ;;;###autoload
 (defun consult-info (&optional top-node)
