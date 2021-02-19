@@ -1,4 +1,4 @@
-;;; consult-flymake.el --- Provides the command `consult-flymake'  -*- lexical-binding: t; -*-
+;;; consult-flymake.el --- Provides the command `consult-flymake' -*- lexical-binding: t -*-
 
 ;; This file is not part of GNU Emacs.
 
@@ -18,17 +18,13 @@
 ;;; Commentary:
 
 ;; Provides the command `consult-flymake'. This is an extra package,
-;; to avoid loading Flymake.
+;; to avoid always loading Flymake. The `consult-flymake' command is
+;; autoloaded.
 
 ;;; Code:
 
 (require 'consult)
 (require 'flymake)
-
-(defcustom consult-preview-flymake t
-  "Enable Flymake preview during selection."
-  :type 'boolean
-  :group 'consult-preview)
 
 (defun consult-flymake--candidates ()
   "Return Flymake errors as alist."
@@ -77,20 +73,19 @@
 (defun consult-flymake ()
   "Jump to Flymake diagnostic."
   (interactive)
-  (consult--jump
-   (consult--read "Flymake diagnostic: "
-                  (consult--with-increased-gc (consult-flymake--candidates))
-                  :category 'flymake-error
-                  :history t ;; disable history
-                  :require-match t
-                  :sort nil
-                  :narrow '((lambda (cand) (= (caddr cand) consult--narrow))
-                            (?e . "Error")
-                            (?w . "Warning")
-                            (?n . "Note"))
-                  :lookup #'consult--lookup-cadr
-                  :preview (and consult-preview-flymake
-                                (consult--preview-position 'consult-preview-error)))))
+  (consult--read
+   (consult--with-increased-gc (consult-flymake--candidates))
+   :prompt "Flymake diagnostic: "
+   :category 'consult-flymake-error
+   :history t ;; disable history
+   :require-match t
+   :sort nil
+   :narrow `(,(lambda (cand) (= (caddr cand) consult--narrow))
+             (?e . "Error")
+             (?w . "Warning")
+             (?n . "Note"))
+   :lookup #'consult--lookup-cadr
+   :state (consult--jump-state 'consult-preview-error)))
 
 (provide 'consult-flymake)
 ;;; consult-flymake.el ends here

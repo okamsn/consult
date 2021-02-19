@@ -1,11 +1,11 @@
-;;; consult-flycheck.el --- Provides the command `consult-flycheck'  -*- lexical-binding: t; -*-
+;;; consult-flycheck.el --- Provides the command `consult-flycheck' -*- lexical-binding: t -*-
 
 ;; Author: Daniel Mendler, Consult and Selectrum contributors
 ;; Maintainer: Daniel Mendler
 ;; Created: 2020
 ;; License: GPL-3.0-or-later
-;; Version: 0.1
-;; Package-Requires: ((consult "0.1") (flycheck "31") (emacs "26.1"))
+;; Version: 0.5
+;; Package-Requires: ((consult "0.5") (flycheck "31") (emacs "26.1"))
 ;; Homepage: https://github.com/minad/consult
 
 ;; This file is not part of GNU Emacs.
@@ -25,18 +25,13 @@
 
 ;;; Commentary:
 
-;; Provides the command `consult-flycheck'. This is an extra package, since the
-;; consult.el package only depends on Emacs core components.
+;; Provides the command `consult-flycheck'. This is an extra package,
+;; since the consult.el package only depends on Emacs core components.
 
 ;;; Code:
 
 (require 'consult)
 (require 'flycheck)
-
-(defcustom consult-preview-flycheck t
-  "Enable flycheck preview during selection."
-  :type 'boolean
-  :group 'consult-preview)
 
 (defun consult-flycheck--candidates ()
   "Return flycheck errors as alist."
@@ -45,9 +40,12 @@
     (user-error "No flycheck errors (Status: %s)" flycheck-last-status-change))
   (let* ((errors (mapcar
                   (lambda (err)
-                    (list (file-name-nondirectory (flycheck-error-filename err))
-                          (number-to-string (flycheck-error-line err))
-                          err))
+                    (list
+                     (if-let (file (flycheck-error-filename err))
+                         (file-name-nondirectory file)
+                       (buffer-name (flycheck-error-buffer err)))
+                     (number-to-string (flycheck-error-line err))
+                     err))
                   (seq-sort #'flycheck-error-level-< flycheck-current-errors)))
          (file-width (apply #'max (mapcar (lambda (x) (length (car x))) errors)))
          (line-width (apply #'max (mapcar (lambda (x) (length (cadr x))) errors)))
@@ -78,20 +76,19 @@
 (defun consult-flycheck ()
   "Jump to flycheck error."
   (interactive)
-  (consult--jump
-   (consult--read "Flycheck error: "
-                  (consult--with-increased-gc (consult-flycheck--candidates))
-                  :category 'flycheck-error
-                  :history t ;; disable history
-                  :require-match t
-                  :sort nil
-                  :narrow '((lambda (cand) (= (caddr cand) consult--narrow))
-                            (?e . "Error")
-                            (?w . "Warning")
-                            (?i . "Info"))
-                  :lookup #'consult--lookup-cadr
-                  :preview (and consult-preview-flycheck
-                                (consult--preview-position 'consult-preview-error)))))
+  (consult--read
+   (consult--with-increased-gc (consult-flycheck--candidates))
+   :prompt "Flycheck error: "
+   :category 'consult-flycheck-error
+   :history t ;; disable history
+   :require-match t
+   :sort nil
+   :narrow `(,(lambda (cand) (= (caddr cand) consult--narrow))
+             (?e . "Error")
+             (?w . "Warning")
+             (?i . "Info"))
+   :lookup #'consult--lookup-cadr
+   :state (consult--jump-state 'consult-preview-error)))
 
 (provide 'consult-flycheck)
 ;;; consult-flycheck.el ends here

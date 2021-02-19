@@ -1,12 +1,4 @@
-;;; consult-selectrum.el --- Selectrum integration for Consult  -*- lexical-binding: t; -*-
-
-;; Author: Daniel Mendler, Consult and Selectrum contributors
-;; Maintainer: Daniel Mendler
-;; Created: 2020
-;; License: GPL-3.0-or-later
-;; Version: 0.1
-;; Package-Requires: ((consult "0.1") (selectrum "3.0") (emacs "26.1"))
-;; Homepage: https://github.com/minad/consult
+;;; consult-selectrum.el --- Selectrum integration for Consult -*- lexical-binding: t -*-
 
 ;; This file is not part of GNU Emacs.
 
@@ -25,66 +17,82 @@
 
 ;;; Commentary:
 
-;; Selectrum integration for Consult. This is an extra package, since
-;; the consult.el package only depends on Emacs core components.
+;; Integration code for the Selectrum completion system. This package
+;; is automatically loaded by Consult.
 
 ;;; Code:
 
 (require 'consult)
-(require 'selectrum)
 
-(defun consult-selectrum--match ()
-  "Return selectrum matching function."
-  (when (eq completing-read-function #'selectrum-completing-read)
-    selectrum-refine-candidates-function))
+;; NOTE: It is not guaranteed that Selectrum is available during compilation!
+(defvar selectrum-default-value-format)
+(defvar selectrum-fix-vertical-window-height)
+(defvar selectrum-highlight-candidates-function)
+(defvar selectrum-is-active)
+(defvar selectrum-move-default-candidate)
+(defvar selectrum-refine-candidates-function)
+(declare-function selectrum-exhibit "selectrum")
+(declare-function selectrum-get-current-candidate "selectrum")
+
+(defun consult-selectrum--filter (_category highlight)
+  "Return selectrum filter function with HIGHLIGHT."
+  ;; Do not use selectrum-is-active here, since we want to always use
+  ;; the Selectrum filtering when Selectrum is installed, even when
+  ;; Selectrum is currently not active.
+  ;; However if `selectrum-refine-candidates-function' is the default
+  ;; function, which uses the completion styles, the Selectrum filtering
+  ;; is not used and `consult--default-completion-filter' takes over.
+  (when (and (eq completing-read-function 'selectrum-completing-read)
+             (not (eq selectrum-refine-candidates-function
+                      'selectrum-refine-candidates-using-completions-styles)))
+    (if highlight
+        (lambda (str cands)
+          (funcall selectrum-highlight-candidates-function str
+                   (funcall selectrum-refine-candidates-function str cands)))
+      selectrum-refine-candidates-function)))
 
 (defun consult-selectrum--candidate ()
   "Return current selectrum candidate."
-  (when (eq completing-read-function #'selectrum-completing-read)
-    (selectrum-get-current-candidate)))
+  (and selectrum-is-active (selectrum-get-current-candidate)))
 
 (defun consult-selectrum--refresh ()
   "Refresh selectrum view."
-  (when (eq completing-read-function #'selectrum-completing-read)
+  (when selectrum-is-active
+    (if consult--narrow
+        (setq-local selectrum-default-value-format nil)
+      (kill-local-variable 'selectrum-default-value-format))
     (selectrum-exhibit 'keep-selected)))
 
-(add-hook 'consult--completion-match-hook #'consult-selectrum--match)
+(cl-defun consult-selectrum--read-setup-adv (candidates &key default-top &allow-other-keys)
+  "Advice for `consult--read-setup' for Selectrum specific setup.
+
+See `consult--read' for the CANDIDATES and DEFAULT-TOP arguments."
+  (setq-local selectrum-move-default-candidate default-top)
+  ;; Fix selectrum height for async completion table
+  (when (functionp candidates) (setq-local selectrum-fix-vertical-window-height t)))
+
+(defun consult-selectrum--split-wrap (orig split)
+  "Wrap candidates highlight/refinement ORIG function, splitting the input using SPLIT."
+  (lambda (str cands)
+    (funcall orig (cadr (funcall split str 0)) cands)))
+
+(defun consult-selectrum--split-setup-adv (orig split)
+  "Advice for `consult--split-setup' to be used by Selectrum.
+
+ORIG is the original function.
+SPLIT is the splitter function."
+  (if (not selectrum-is-active)
+      (funcall orig split)
+    (setq-local selectrum-refine-candidates-function
+		(consult-selectrum--split-wrap selectrum-refine-candidates-function split))
+    (setq-local selectrum-highlight-candidates-function
+		(consult-selectrum--split-wrap selectrum-highlight-candidates-function split))))
+
+(add-hook 'consult--completion-filter-hook #'consult-selectrum--filter)
 (add-hook 'consult--completion-candidate-hook #'consult-selectrum--candidate)
 (add-hook 'consult--completion-refresh-hook #'consult-selectrum--refresh)
-
-;; HACK: Hopefully selectrum adds something like this to the official API.
-;; https://github.com/raxod502/selectrum/issues/243
-;; https://github.com/raxod502/selectrum/pull/244
-(defun consult-selectrum--read-setup (fun prompt candidates &rest opts)
-  "Advice, which configures `consult--read' for selectrum.
-
-FUN is the original function.
-PROMPT is the prompt.
-CANDIDATES is the candidate list.
-OPTS is the option plist."
-  (minibuffer-with-setup-hook
-      (lambda ()
-        (setq-local selectrum--move-default-candidate-p (plist-get opts :default-top))
-        ;; Fix height for async completion table
-        (when (functionp candidates)
-          (setq-local selectrum-fix-minibuffer-height t)))
-    (apply fun prompt candidates opts)))
-
-(advice-add #'consult--read :around #'consult-selectrum--read-setup)
-
-(defun consult-selectrum--async-split-wrap (orig)
-  "Wrap selectrum candidates highlight/refinement ORIG function for `consult--async-split'."
-  (lambda (str cands)
-    (funcall orig (substring str (cdr (consult--async-split-string str))) cands)))
-
-(defun consult-selectrum--async-split-setup ()
-  "Advice for `consult--async-split-setup' to be used by Selectrum."
-  (setq-local selectrum-refine-candidates-function
-              (consult-selectrum--async-split-wrap selectrum-refine-candidates-function))
-  (setq-local selectrum-highlight-candidates-function
-              (consult-selectrum--async-split-wrap selectrum-highlight-candidates-function)))
-
-(advice-add #'consult--async-split-setup :before #'consult-selectrum--async-split-setup)
+(advice-add #'consult--read-setup :before #'consult-selectrum--read-setup-adv)
+(advice-add #'consult--split-setup :around #'consult-selectrum--split-setup-adv)
 
 (provide 'consult-selectrum)
 ;;; consult-selectrum.el ends here
