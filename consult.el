@@ -3756,6 +3756,48 @@ sections are actually ordered."
                       candidates-alist)))
             (nreverse candidates-alist)))))))
 
+(defun consult--info-top-dir-menu-items ()
+  (let ((sub-topic-format
+         ;; The `info' library states:
+         ;; Note that nowadays we expect Info files to be made using makeinfo.
+         ;; In particular we make these assumptions:
+         ;;  - a menu item MAY contain colons but not colon-space ": "
+         ;;  - a menu item ending with ": " (but not ":: ") is an index entry
+         ;;  - a node name MAY NOT contain a colon
+         ;; This distinction is to support indexing of computer programming
+         ;; language terms that may contain ":" but not ": ".
+         (rx (seq "* " (group (+? anything))
+                  ": "
+                  (group "(" (+? anything) ")" (*? (not ".")))
+                  "."
+                  (zero-or-one (seq (any "\n" " " "\t")
+                                    (group (+? anychar))))
+                  "\n" (or "\n" "*")))))
+    (save-match-data
+      (save-selected-window
+        (with-temp-buffer
+          ;; Some nodes created from multiple files, so we need to create a
+          ;; buffer to make sure that we see everything.
+          (info "(dir)Top" (current-buffer))
+          (goto-char (point-min))
+          (search-forward "Menu:\n")
+          (let ((candidates-alist))
+            (while (re-search-forward sub-topic-format nil t)
+              (forward-line 0)         ; Go back to start of line.
+              (let* ((node-display-name (match-string-no-properties 1))
+                     (node-actual-name (or (match-string-no-properties 2) node-display-name)))
+                (push (cons (concat node-display-name
+                                    (if-let ((node-description (match-string-no-properties 3)))
+                                        (propertize
+                                         (thread-last node-description
+                                           (replace-regexp-in-string "\n" "")
+                                           (replace-regexp-in-string " +" " ")
+                                           (concat " - "))
+                                         'face 'completions-annotations)))
+                            node-actual-name)
+                      candidates-alist)))
+            (nreverse candidates-alist)))))))
+
 (defun consult--info-top-node-candidates ()
   "Return a list of top-level Info nodes."
   (save-match-data
