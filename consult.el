@@ -3798,19 +3798,6 @@ sections are actually ordered."
                       candidates-alist)))
             (nreverse candidates-alist)))))))
 
-(defun consult--info-top-node-candidates ()
-  "Return a list of top-level Info nodes."
-  (save-match-data
-    (thread-last (append (or Info-directory-list Info-default-directory-list)
-                         Info-additional-directory-list)
-      (mapcan (lambda (directory)
-                (when (file-directory-p directory)
-                  (directory-files directory nil "\\.info" t))))
-      (mapcar (lambda (file)
-                (string-match "\\(.+?\\)\\." file)
-                (match-string 1 file)))
-      seq-uniq)))
-
 ;;;###autoload
 (defun consult-info (&optional top-node)
   "Use `completing-read' to jump to an Info topic.
@@ -3819,17 +3806,26 @@ Select from the available Info top-level nodes, then one of the sub-nodes.
 If TOP-NODE is provided, then just select from its sub-nodes."
   (interactive)
   (unless top-node
-    (setq top-node (consult--read "Info node: "
-                                  (consult--info-top-node-candidates))))
-  (let ((section-candidates-alist (consult--info-section-candidates top-node)))
-    (info (format "(%s)%s"
-                  top-node
-                  (consult--read "Info section: "
-                                 section-candidates-alist
-                                 :require-match t
-                                 :sort nil
-                                 :lookup #'consult--lookup-cdr
-                                 :category 'info)))))
+    (setq top-node (consult--read (consult--info-top-dir-menu-items)
+                                  :prompt "Info node: "
+                                  :require-match t
+                                  :sort nil
+                                  :lookup #'consult--lookup-cdr
+                                  :category 'info)))
+  ;; If looking at a base node (e.g., "(emacs)"), then select from list of
+  ;; optional sub-nodes.  If looking at a normal node (e.g., "(emacs)Intro"),
+  ;; then just go there instead of asking for more sub-nodes.
+  (if (string-match-p "(.*?)\\'" top-node)
+      (let ((section-candidates-alist (consult--info-section-candidates top-node)))
+        (info (concat
+               top-node
+               (consult--read section-candidates-alist
+                              :prompt "Info section: "
+                              :require-match t
+                              :sort nil
+                              :lookup #'consult--lookup-cdr
+                              :category 'info))))
+    (info top-node)))
 
 ;;;;; Command: consult-man
 
