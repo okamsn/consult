@@ -49,6 +49,7 @@
   (require 'subr-x))
 (require 'bookmark)
 (require 'imenu)
+(require 'info)
 (require 'kmacro)
 (require 'recentf)
 (require 'ring)
@@ -3698,6 +3699,163 @@ The locate process is started asynchronously, similar to `consult-grep'.
 See `consult-grep' for more details regarding the asynchronous search."
   (interactive)
   (consult--find "Locate: " consult-locate-command initial))
+
+(defun consult--info-section-candidates (top-node)
+  "Return an alist of sections and candidates in the Info buffer TOP-NODE.
+
+Candidates are returned in the order that their links are listed
+in the Info buffer, which might be different from how the
+sections are actually ordered."
+  (let ((sub-topic-format
+         ;; Node links look like "* Some Thing:: Description" or
+         ;; "* Some Thing: actual link. Description", where descriptions
+         ;; are optional and might continue on the next line.
+         ;;
+         ;; The `info' library states:
+         ;; Note that nowadays we expect Info files to be made using makeinfo.
+         ;; In particular we make these assumptions:
+         ;;  - a menu item MAY contain colons but not colon-space ": "
+         ;;  - a menu item ending with ": " (but not ":: ") is an index entry
+         ;;  - a node name MAY NOT contain a colon
+         ;; This distinction is to support indexing of computer programming
+         ;; language terms that may contain ":" but not ": ".
+         (rx "* " (group (+? (not ?:))) ":"
+             (or ":" (seq " "  (group (+? (not "."))) "."))
+             ;; Include the description, if one exists.
+             ;; If it doesn't, the line ends immediately.
+             (or "\n"
+                 (seq (0+ blank)
+                      (group (+? anychar))
+                      ;; Sometimes a heading follows on the next line,
+                      ;; and sometimes there's any empty blank line
+                      ;; (such as before a section title).  For now,
+                      ;; assume continuation lines use indentation and
+                      ;; other lines don't.
+                      "\n" (not blank))))))
+    (save-match-data
+      (save-selected-window
+        (with-temp-buffer
+          ;; Some nodes created from multiple files, so we need to create a
+          ;; buffer to make sure that we see everything.
+          (info top-node (current-buffer))
+          (goto-char (point-min))
+          (let ((candidates-alist))
+            (while (re-search-forward sub-topic-format nil t)
+              (forward-line 0)         ; Go back to start of line.
+              (let* ((node-display-name (match-string 1))
+                     (node-actual-name (or (match-string 2) node-display-name)))
+                (push (cons (concat node-display-name
+                                    (if-let ((node-description (match-string 3)))
+                                        (propertize
+                                         (thread-last node-description
+                                           (replace-regexp-in-string "\n" "")
+                                           (replace-regexp-in-string " +" " ")
+                                           (concat " - "))
+                                         'face 'completions-annotations)))
+                            node-actual-name)
+                      candidates-alist)))
+            (nreverse candidates-alist)))))))
+
+(defun consult--info-top-dir-menu-items ()
+  (let ((sub-topic-format
+         ;; The `info' library states:
+         ;; Note that nowadays we expect Info files to be made using makeinfo.
+         ;; In particular we make these assumptions:
+         ;;  - a menu item MAY contain colons but not colon-space ": "
+         ;;  - a menu item ending with ": " (but not ":: ") is an index entry
+         ;;  - a node name MAY NOT contain a colon
+         ;; This distinction is to support indexing of computer programming
+         ;; language terms that may contain ":" but not ": ".
+         (rx (seq "* " (group (+? anything))
+                  ": "
+                  (group "(" (+? anything) ")" (*? (not ".")))
+                  "."
+                  (zero-or-one (seq (any "\n" " " "\t")
+                                    (group (+? anychar))))
+                  "\n" (or "\n" "*")))))
+    (let ((candidates-alist))
+      ;; Go through nodes in Info buffer "(dir)Top".
+      (save-match-data
+        (save-selected-window
+          (with-temp-buffer
+            ;; Some nodes created from multiple files, so we need to create a
+            ;; buffer to make sure that we see everything.
+            (info "(dir)Top" (current-buffer))
+            (goto-char (point-min))
+            (search-forward "Menu:\n")
+            (while (re-search-forward sub-topic-format nil t)
+              (forward-line 0)          ; Go back to start of line.
+              (let* ((node-display-name (match-string-no-properties 1))
+                     (node-actual-name (or (match-string-no-properties 2) node-display-name)))
+                (push (cons (concat node-display-name
+                                    (if-let ((node-description (match-string-no-properties 3)))
+                                        (propertize
+                                         (thread-last node-description
+                                           (replace-regexp-in-string "\n" "")
+                                           (replace-regexp-in-string " +" " ")
+                                           (concat " - "))
+                                         'face 'completions-annotations)))
+                            node-actual-name)
+                      candidates-alist))))))
+      ;; In case something isn't listed (Emacs might just insert itself?), also
+      ;; add in files from the Info directories as nodes themselves.
+      (dolist (file (save-match-data
+                      (thread-last (append (or Info-directory-list
+                                               Info-default-directory-list)
+                                           Info-additional-directory-list)
+                        (mapcan (lambda (directory)
+                                  (when (file-directory-p directory)
+                                    (directory-files directory nil "\\.info" t))))
+                        (mapcar (lambda (file)
+                                  (string-match "\\(.+?\\)\\." file)
+                                  (match-string 1 file)))
+                        seq-uniq)))
+        (let ((node (concat "(" file ")")))
+          (unless (rassoc node candidates-alist)
+            (push (cons file node) candidates-alist))))
+      (nreverse candidates-alist))))
+
+(defun consult--info-state ()
+  "State function for previewing Info buffers."
+  (let ((info-buffer-preview-name "*info-preview*")
+        (open-buffers))
+    (lambda (cand restore)
+      (message "Cand: %s" cand)
+      (when cand
+        (with-temp-buffer-window "*info-preview*" nil nil
+          (info cand info-buffer-preview-name)))
+      (when (and cand restore)
+        (message "restore cand: %s" cand)))))
+
+;;;###autoload
+(defun consult-info (&optional top-node)
+  "Use `completing-read' to jump to an Info topic.
+
+Select from the available Info top-level nodes, then one of the sub-nodes.
+If TOP-NODE is provided, then just select from its sub-nodes."
+  (interactive)
+  (unless top-node
+    (setq top-node (consult--read (consult--info-top-dir-menu-items)
+                                  :prompt "Info node: "
+                                  :require-match t
+                                  :sort nil
+                                  :state (consult--info-state)
+                                  :lookup #'consult--lookup-cdr
+                                  :category 'info)))
+  ;; If looking at a base node (e.g., "(emacs)"), then select from list of
+  ;; optional sub-nodes.  If looking at a normal node (e.g., "(emacs)Intro"),
+  ;; then just go there instead of asking for more sub-nodes.
+  (if (string-match-p "(.*?)\\'" top-node)
+      (let ((section-candidates-alist (consult--info-section-candidates top-node)))
+        (info (concat
+               top-node
+               (consult--read section-candidates-alist
+                              :prompt "Info section: "
+                              :require-match t
+                              :sort nil
+                              :lookup #'consult--lookup-cdr
+                              :category 'info))))
+    (info top-node)))
 
 ;;;;; Command: consult-man
 
